@@ -1,0 +1,4 @@
+1.<download.ipynb>是用来自动化下载AIA和HMI数据的
+2.<01plot_hmi.pro>是郭老师用来从HMI_B720s计算得到Bxyz的
+3.<HMI_vector2Brthetaphi2.ipynb>是用来将Bxyz转化成Brpt的
+4.<process_list.ipynb>是用来处理下载的耀斑列表，生成XMCBA的耀斑excel文件的
