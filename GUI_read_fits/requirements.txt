@@ -1,0 +1,7 @@
+astropy
+imageio
+imageio-ffmpeg
+matplotlib
+numpy
+pillow
+sunpy

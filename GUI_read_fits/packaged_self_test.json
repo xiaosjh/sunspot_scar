@@ -1,0 +1,4 @@
+{
+  "ok": false,
+  "traceback": "Traceback (most recent call last):\n  File \"app.py\", line 2448, in run_packaged_self_test\n    raise RuntimeError(\"SunPy AIA color tables are unavailable.\")\nRuntimeError: SunPy AIA color tables are unavailable.\n"
+}

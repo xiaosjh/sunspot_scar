@@ -2,3 +2,9 @@
 2.<01plot_hmi.pro>是郭老师用来从HMI_B720s计算得到Bxyz的
 3.<HMI_vector2Brthetaphi2.ipynb>是用来将Bxyz转化成Brpt的
 4.<process_list.ipynb>是用来处理下载的耀斑列表，生成XMCBA的耀斑excel文件的
+5.<sub_rot_map.ipynb>是根据列表给的位置，在±200角秒内，旋转对齐到每一次事件的最初时刻
+6.<repair_m_downloads.py>是发现下载的M级耀斑的数据缺了非常多，重新补全一下，使用的方法是cd到目录下后 python repair_m_downloads.py --download
+7.missing_M_downloads.csv              当前缺什么
+missing_M_downloads_current_run.csv  这次准备补什么
+redownload_attempts_M_resilient.csv  这次补下载过程发生了什么
+redownload_failed_M_resilient.csv    补完以后还差什么

@@ -1,5 +1,6 @@
 ;pro plot_hmi
 root_dir = 'C:\Learning\PHD2nd\sunspotscar\data\X'
+;root_dir='C:\Learning\PHD2nd\sunspotscar\temp'
 hmi_dirs = file_search(root_dir + '\*\hmi.B_720s', count=n_hmi_dirs, /test_directory)
 
 for idir = 0, n_hmi_dirs - 1 do begin
