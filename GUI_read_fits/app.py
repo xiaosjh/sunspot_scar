@@ -51,7 +51,7 @@ except Exception:
     sunpy_color_tables = None
 
 
-DEFAULT_DATA_ROOT = Path(r"C:\Learning\PHD2nd\sunspotscar\data\M")
+DEFAULT_DATA_ROOT = Path(r"E:\Learning\PHD3rd\sunspotscar\data\C")
 FITS_EXTENSIONS = {".fits", ".fit", ".fts"}
 # Edit these names if you want different channels checked by default.
 DEFAULT_CHANNEL_HINTS: tuple[str, ...] = (
@@ -60,20 +60,22 @@ DEFAULT_CHANNEL_HINTS: tuple[str, ...] = (
     "211sub_map",
     "hmi.B_720s/Br_sub.fits",
     "hmi.B_720s/inclination_calc_sub.fits",
-    "hmi.Ic_45ssub_map",
+    "hmi.Ic_45ssub_map_aligned",
     "hmi.Ic_45s_sub_map",
 )
 # Edit these values if you want a different default Br display range.
 DEFAULT_BR_MIN_G = -800.0
 DEFAULT_BR_MAX_G = 800.0
 # Change to "Curve" if you want freehand annotations by default.
-DEFAULT_ANNOTATION_MODE = "Line"
+DEFAULT_ANNOTATION_MODE = "Curve"
 ANNOTATION_MODES = ("Line", "Curve")
-PREVIEW_CACHE_VERSION = "preview-v10"
+PREVIEW_CACHE_VERSION = "preview-v12"
 PREVIEW_CACHE_DIR = Path(__file__).resolve().parent / ".preview_cache"
 AIA_STRETCHES = ("asinh", "log", "linear")
+AIA_WAVELENGTHS = (94, 131, 171, 193, 211, 304, 335, 1600, 1700, 4500)
 
 FALLBACK_AIA_CMAPS = {
+    94: LinearSegmentedColormap.from_list("AIA 94 fallback", ["#000000", "#104c38", "#409f80", "#a0e7c0", "#ffffff"], N=256),
     131: LinearSegmentedColormap.from_list(
         "AIA 131 fallback",
         ["#000000", "#001a18", "#006d70", "#16d9d2", "#d8ffff"],
@@ -90,6 +92,16 @@ FALLBACK_AIA_CMAPS = {
         N=256,
     ),
 }
+# SunPy 不可用时，其余 AIA 波段也保留彩色显示。
+for _wave, _colors in {
+    171: ["#000000", "#604000", "#dca400", "#fff2a0"],
+    193: ["#000000", "#692611", "#d48651", "#fff0c0"],
+    335: ["#000000", "#172c6c", "#776bc7", "#efeaff"],
+    1600: ["#000000", "#554009", "#c4a04a", "#ffffdc"],
+    1700: ["#000000", "#683b28", "#b99280", "#ffffff"],
+    4500: ["#000000", "#535329", "#baba68", "#ffffb0"],
+}.items():
+    FALLBACK_AIA_CMAPS[_wave] = LinearSegmentedColormap.from_list(f"AIA {_wave} fallback", _colors, N=256)
 
 
 @dataclass(frozen=True)
@@ -231,12 +243,14 @@ def load_fits_image(path_text: str) -> np.ndarray:
 
 def is_hmi_continuum(sequence_name: str) -> bool:
     lower = sequence_name.lower()
-    return "hmi.ic" in lower or "continuum" in lower
+    # hmi_con_submap 是新事件中已对齐、裁剪的连续谱目录。
+    return "hmi.ic" in lower or "continuum" in lower or re.search(r"hmi[._-]con(?:[._-]|$)", lower) is not None
 
 
 def is_br_channel(sequence_name: str) -> bool:
     lower = sequence_name.lower()
-    return "br.fits" in lower or "br_sub.fits" in lower
+    # 保留旧文件名规则，同时识别 hmi_Br、hmi_Br_submap 和带时间的 Br 文件名。
+    return "br" in lower
 
 
 def is_inclination_channel(sequence_name: str) -> bool:
@@ -255,13 +269,15 @@ def is_default_selected_channel(name: str) -> bool:
     return (
         lower.startswith("131")
         or lower.startswith("304")
-        or "hmi.ic_45s" in lower
         or "hmi.ic45s" in lower
+        #or "hmi.ic_45s" in lower
     )
 
 
 def orient_image_for_display(data: np.ndarray, sequence_name: str) -> np.ndarray:
-    if is_hmi_continuum(sequence_name):
+    # 保留旧通道的翻转约定；新 hmi_con_submap 已对齐到 AIA 网格，不因亮度分类而再次翻转。
+    lower = sequence_name.lower()
+    if "hmi.ic" in lower or "continuum" in lower:
         return np.rot90(data, 2)
     return data
 
@@ -347,13 +363,59 @@ def nearest_frame(sequence: ChannelSequence, target: FrameInfo, index: int) -> F
 
 
 def aia_wavelength(sequence_name: str) -> int | None:
-    match = re.search(r"(?<!\d)(131|211|304)(?!\d)", sequence_name)
+    match = re.search(r"(?<!\d)0?(94|131|171|193|211|304|335|1600|1700|4500)(?!\d)", sequence_name)
     if not match:
         return None
     return int(match.group(1))
 
 
+@lru_cache(maxsize=4096)
+def fits_aia_wavelength(path_text: str, file_size: int, modified_ns: int) -> int | None:
+    """仅读取 FITS 头信息；文件大小和修改时间用于避免复用过期结果。"""
+    try:
+        with fits.open(path_text, memmap=True) as hdul:
+            header = hdul[0].header.copy()
+            for hdu in hdul:
+                if isinstance(hdu, (fits.PrimaryHDU, fits.ImageHDU, fits.CompImageHDU)) and hdu.header.get("NAXIS", 0) >= 2:
+                    header.update(hdu.header)
+                    break
+        instrument = f'{header.get("INSTRUME", "")} {header.get("TELESCOP", "")}'.lower()
+        if instrument.strip() and "aia" not in instrument:
+            return None
+        value = header.get("WAVELNTH", header.get("WAVELENGTH"))
+        if value is None:
+            return None
+        unit = u.Unit(header.get("WAVEUNIT") or "angstrom")
+        wavelength = (float(value) * unit).to_value(u.angstrom)
+        return next((wave for wave in AIA_WAVELENGTHS if np.isclose(wavelength, wave, rtol=0, atol=0.5)), None)
+    except (OSError, ValueError, TypeError, u.UnitConversionError):
+        return None
+
+
+def resolve_display_channel(sequence_name: str, path: Path) -> str:
+    """保留原通道名称作优先判断；未知通道再参考文件名和 FITS 波长。"""
+    if is_br_channel(sequence_name) or is_inclination_channel(sequence_name) or is_hmi_continuum(sequence_name):
+        return sequence_name
+    # 文件名含 Br 时，普通文件夹中的 Br 序列也可进入 Br display。
+    if is_br_channel(path.name) or is_br_channel(path.parent.name):
+        return f"{sequence_name}/Br"
+    if is_hmi_continuum(path.name) or is_hmi_continuum(path.parent.name):
+        return f"{sequence_name}/HMI continuum"
+    if aia_wavelength(sequence_name) is not None:
+        return sequence_name
+    wavelength = aia_wavelength(path.name)
+    if wavelength is None:
+        try:
+            stat = path.stat()
+            wavelength = fits_aia_wavelength(str(path), stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return sequence_name
+    return f"{sequence_name}/AIA {wavelength}" if wavelength is not None else sequence_name
+
+
 def channel_cmap(sequence_name: str):
+    if is_br_channel(sequence_name):
+        return "gray"
     if is_inclination_channel(sequence_name):
         return colormaps["Blues_r"]
     wavelength = aia_wavelength(sequence_name)
@@ -408,7 +470,7 @@ def channel_display_name(sequence_name: str) -> str:
 
 
 def overlay_text(frame: FrameInfo, sequence_name: str) -> str:
-    return f"{frame.label} {channel_display_name(sequence_name)}"
+    return f"{frame.label} {channel_display_name(resolve_display_channel(sequence_name, frame.path))}"
 
 
 def grid_shape(count: int) -> tuple[int, int]:
@@ -436,7 +498,7 @@ def read_preview_data(path: Path, max_side: int) -> np.ndarray:
 def make_preview_image(path: Path, sequence_name: str, max_side: int, settings: DisplaySettings | None = None) -> np.ndarray:
     settings = settings or DisplaySettings()
     data = orient_image_for_display(read_preview_data(path, max_side), sequence_name)
-    return colorize_preview_data(data, sequence_name, settings)
+    return colorize_preview_data(data, sequence_name, settings, path=path)
 
 
 def colorize_preview_data(
@@ -444,7 +506,10 @@ def colorize_preview_data(
     sequence_name: str,
     settings: DisplaySettings | None = None,
     base_range: tuple[float, float] | None = None,
+    path: Path | None = None,
 ) -> np.ndarray:
+    if path is not None:
+        sequence_name = resolve_display_channel(sequence_name, path)
     settings = settings or DisplaySettings()
     vmin, vmax = display_limits(data, sequence_name, settings, base_range)
     scaled = np.clip((data - vmin) / (vmax - vmin), 0.0, 1.0)
@@ -538,7 +603,7 @@ def build_preview_worker(
     if use_disk_cache:
         cache_path = preview_disk_cache_path(path, max_side, settings)
         if not cache_path.exists():
-            rgb = colorize_preview_data(data, sequence_name, settings)
+            rgb = colorize_preview_data(data, sequence_name, settings, path=path)
             tmp_path = cache_path.with_suffix(f".{os.getpid()}.tmp.png")
             try:
                 Image.fromarray(rgb).save(tmp_path)
@@ -547,7 +612,7 @@ def build_preview_worker(
                 tmp_path.unlink(missing_ok=True)
         return path_text, str(cache_path), str(scalar_path)
 
-    rgb = colorize_preview_data(data, sequence_name, settings)
+    rgb = colorize_preview_data(data, sequence_name, settings, path=path)
     digest = hashlib.sha1(f"memory|{os.getpid()}|{threading.get_ident()}|{path_text}".encode("utf-8")).hexdigest()
     tmp_path = PREVIEW_CACHE_DIR / f"{digest}.tmp.png"
     Image.fromarray(rgb).save(tmp_path)
@@ -615,7 +680,7 @@ def draw_sequence_grid(
         if preview is None:
             data = orient_image_for_display(load_fits_image(str(frame.path)), sequence.name)
             sequence_settings = settings_by_sequence.get(sequence.name, settings) if settings_by_sequence else settings
-            preview = colorize_preview_data(data, sequence.name, sequence_settings)
+            preview = colorize_preview_data(data, sequence.name, sequence_settings, path=frame.path)
             height, width = data.shape[:2]
             image_artist = ax.imshow(preview, origin="lower", aspect="equal", extent=(0, width, 0, height))
         else:
@@ -1124,7 +1189,7 @@ class FitsViewerApp:
 
     def select_submaps(self) -> None:
         for name, var in self.channel_vars.items():
-            var.set(name.endswith("sub_map") or name.endswith("Br_sub.fits"))
+            var.set(name.lower().endswith(("sub_map", "submap", "br_sub.fits")))
 
     def current_display_settings(self) -> DisplaySettings:
         try:
@@ -1213,23 +1278,32 @@ class FitsViewerApp:
         self.br_max_level.set(f"{magnitude:g}")
         self.apply_br_display_settings()
 
+    def display_channel_for_sequence(self, sequence_name: str) -> str:
+        # sequence_name 是界面里的图层名；首帧用于判断这个图层的实际数据类型。
+        sequence = next((item for item in self.sequences if item.name == sequence_name), None)
+        if sequence is not None and sequence.frames:
+            return resolve_display_channel(sequence_name, sequence.frames[0].path)
+        return sequence_name
+
     def settings_for_sequence(self, sequence_name: str) -> DisplaySettings:
-        return self.layer_settings.get(sequence_name, default_display_settings(sequence_name))
+        if sequence_name in self.layer_settings:
+            return self.layer_settings[sequence_name]
+        return default_display_settings(self.display_channel_for_sequence(sequence_name))
 
     def selected_sequence_name(self) -> str | None:
         selected = self.selected_display_layer.get()
-        if selected and not is_br_channel(selected):
+        if selected and not is_br_channel(self.display_channel_for_sequence(selected)):
             return selected
-        return next((sequence.name for sequence in self.sequences if not is_br_channel(sequence.name)), None)
+        return next((sequence.name for sequence in self.sequences if not is_br_channel(self.display_channel_for_sequence(sequence.name))), None)
 
     def selected_br_sequence_name(self) -> str | None:
         selected = self.selected_br_layer.get()
-        if selected and is_br_channel(selected):
+        if selected and is_br_channel(self.display_channel_for_sequence(selected)):
             return selected
-        return next((sequence.name for sequence in self.sequences if is_br_channel(sequence.name)), None)
+        return next((sequence.name for sequence in self.sequences if is_br_channel(self.display_channel_for_sequence(sequence.name))), None)
 
     def update_display_layer_options(self) -> None:
-        names = [sequence.name for sequence in self.sequences if not is_br_channel(sequence.name)]
+        names = [sequence.name for sequence in self.sequences if not is_br_channel(self.display_channel_for_sequence(sequence.name))]
         self.display_layer_combo["values"] = names
         if names and self.selected_display_layer.get() not in names:
             self.selected_display_layer.set(names[0])
@@ -1240,7 +1314,7 @@ class FitsViewerApp:
         self.update_br_layer_options()
 
     def update_br_layer_options(self) -> None:
-        names = [sequence.name for sequence in self.sequences if is_br_channel(sequence.name)]
+        names = [sequence.name for sequence in self.sequences if is_br_channel(self.display_channel_for_sequence(sequence.name))]
         self.br_layer_combo["values"] = names
         if names and self.selected_br_layer.get() not in names:
             self.selected_br_layer.set(names[0])
@@ -1267,14 +1341,14 @@ class FitsViewerApp:
         self.aia_high_slider.set(high)
         self.update_level_labels()
         self.redraw_levels_control()
-        self.aia_stretch.set(display_stretch(sequence_name, settings))
+        self.aia_stretch.set(display_stretch(self.display_channel_for_sequence(sequence_name), settings))
         self.aia_vmax_percentile.set(settings.vmax_percentile)
         self.update_vmax_label()
         self.layout_display_controls(sequence_name)
 
     def layout_display_controls(self, sequence_name: str) -> None:
         row = 2
-        if aia_wavelength(sequence_name) is not None:
+        if aia_wavelength(self.display_channel_for_sequence(sequence_name)) is not None:
             self.vmax_label.grid(row=row, column=0, sticky="w")
             self.vmax_scale.grid(row=row, column=1, sticky="ew", padx=4)
             self.vmax_entry.grid(row=row, column=2, sticky="e")
@@ -1442,6 +1516,7 @@ class FitsViewerApp:
                     data,
                     panel.sequence_name,
                     self.settings_for_sequence(panel.sequence_name),
+                    path=panel.frame.path,
                 )
                 self.preview_cache[key] = rgb
                 self.preview_cache_keys[key] = self.settings_for_sequence(panel.sequence_name).cache_key()
@@ -1477,6 +1552,7 @@ class FitsViewerApp:
                         data,
                         sequence.name,
                         settings,
+                        path=frame.path,
                     )
                     self.preview_cache_keys[key] = settings.cache_key()
                     recolored += 1
@@ -1506,7 +1582,7 @@ class FitsViewerApp:
                 key = str(frame.path)
                 data = self.scalar_cache.get(key)
                 if data is not None:
-                    self.preview_cache[key] = colorize_preview_data(data, sequence.name, settings)
+                    self.preview_cache[key] = colorize_preview_data(data, sequence.name, settings, path=frame.path)
                     self.preview_cache_keys[key] = settings.cache_key()
                     recolored += 1
         self.detail_cache.clear()
@@ -1523,9 +1599,9 @@ class FitsViewerApp:
         except ValueError as exc:
             messagebox.showerror("Invalid display settings", str(exc))
             return
-        target_sequences = [sequence for sequence in self.sequences if not is_br_channel(sequence.name)]
+        target_sequences = [sequence for sequence in self.sequences if not is_br_channel(self.display_channel_for_sequence(sequence.name))]
         for sequence in target_sequences:
-            self.layer_settings.setdefault(sequence.name, default_display_settings(sequence.name))
+            self.layer_settings.setdefault(sequence.name, self.settings_for_sequence(sequence.name))
             self.layer_settings[sequence.name] = settings
         for sequence in target_sequences:
             for frame in sequence.frames:
@@ -1536,6 +1612,7 @@ class FitsViewerApp:
                         data,
                         sequence.name,
                         settings,
+                        path=frame.path,
                     )
                     self.preview_cache_keys[key] = settings.cache_key()
         self.detail_cache.clear()
@@ -1576,7 +1653,7 @@ class FitsViewerApp:
 
         self.sequences = sequences
         for sequence in self.sequences:
-            self.layer_settings.setdefault(sequence.name, default_display_settings(sequence.name))
+            self.layer_settings.setdefault(sequence.name, self.settings_for_sequence(sequence.name))
         self.update_display_layer_options()
         self.update_timeline_controls(index=0, reset_export=True)
         self.set_slider_without_callback(0)
@@ -1859,6 +1936,7 @@ class FitsViewerApp:
                     data,
                     sequence_name,
                     self.settings_for_sequence(sequence_name),
+                    path=frame.path,
                 )
                 self.preview_cache_keys[key] = settings_key
             return self.preview_cache[key]
@@ -2375,6 +2453,7 @@ class FitsViewerApp:
             data,
             sequence_name,
             settings,
+            path=frame.path,
         )
         self.preview_cache[key] = rgb
         self.preview_cache_keys[key] = settings_key

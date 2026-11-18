@@ -7,7 +7,7 @@
 在 PowerShell 里进入本目录：
 
 ```powershell
-cd C:\Learning\PHD2nd\sunspotscar\program\GUI_read_fits
+cd C:\Learning\PHD3rd\sunspotscar\program\GUI_read_fits
 python app.py
 ```
 
@@ -25,13 +25,16 @@ python -m pip install -r requirements.txt
 - 自动列出事件文件夹
 - 自动列出事件下的波段/数据目录
 - `hmi.B_720s` 下的 `Br_sub.fits` 和 `Br.fits` 会作为单帧数据源单独列出
+- 原有单帧目录规则保留；文件名或通道文件夹名包含 `Br`（不区分大小写）时，也会进入 `Br display`，支持多时刻 Br 序列并统一调整该图层的磁场上下限。
 - 默认不勾选通道，可以用 `Sub maps`、`All`、`Clear` 快速选择
 - `Load selected` 放在左侧 Channels 区域，选择通道后可以就近加载
 - 多面板无缝拼接显示多个波段
-- AIA 131/211/304 优先使用 SunPy 的 AIA 色表
+- AIA 94/131/171/193/211/304/335/1600/1700/4500 优先使用 SunPy 的对应色表；通道名不能识别时，先检查文件名，再读取 FITS 的 `WAVELNTH`（或 `WAVELENGTH`）和 `WAVEUNIT` 判断波段。预览、拉伸控件、翻帧和视频导出共用此规则；缺少 SunPy 时使用内置近似色表。
+- `Sub maps` 同时支持旧的 `sub_map` 和新的 `submap` 文件夹后缀。
 - HMI continuum 和 magnetogram 使用灰度显示
 - HMI continuum (`hmi.Ic_*`) 显示时会旋转 180 度，以匹配其 `CROTA2` 接近 180 度的 FITS 姿态
 - HMI continuum 使用真实 min/max 显示范围，不做百分位裁剪
+- 新的 `hmi_con` / `hmi_con_submap` 目录也按连续谱处理，默认 Levels 为 `-100 / 100`，对应完整 min/max；`hmi_con_submap` 保留已经对齐到 AIA 网格的方向。
 - `Display` 面板可以按 layer 调整 JHelioviewer 风格的 Levels：两个把手都在 `-100 - 1000` 范围内，左把手始终小于右把手；AIA 默认 `-100 / 500`，HMI 白光默认 `-100 / 100`
 - Levels 是一条更宽的轨道上的两个把手，右侧显示当前 low/high 百分比；拖动把手只移动固定基准范围内的端点，不会每次重新计算百分位
 - 每个已加载波段都有独立 Levels；先在 `Layer` 下拉框选波段，再调整 Levels
